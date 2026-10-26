@@ -1,0 +1,742 @@
+--[[
+    Doors Hub - UI simples com uma aba "Main"
+    Funções: Auto Moedas, Auto Chave, Auto Porta, Interação Instantânea,
+             Anti-Screech, Fullbright, Noclip, Velocidade, ESP de Portas
+    Obs: a estrutura do Doors muda com atualizações. Se algo parar de
+    funcionar, o nome de algum objeto/remote provavelmente foi alterado.
+]]
+
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+
+local lp = Players.LocalPlayer
+
+-- remove UI antiga
+local parentGui = (gethui and gethui()) or game:GetService("CoreGui")
+local old = parentGui:FindFirstChild("DoorsHub")
+if old then old:Destroy() end
+
+local State = {
+    AutoLoot = false,
+    AutoKey = false,
+    AutoDoor = false,
+    InstantPrompt = false,
+    AntiScreech = false,
+    Fullbright = false,
+    Noclip = false,
+    DoorESP = false,
+    ESPItems = false,
+    ESPGold = false,
+    ESPHiding = false,
+    ESPEntities = false,
+    ESPBooks = false,
+    Speed = 175,
+}
+
+--------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------
+local function getRoot()
+    local c = lp.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHum()
+    local c = lp.Character
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function latestRoom()
+    local gd = RS:FindFirstChild("GameData")
+    local v = gd and gd:FindFirstChild("LatestRoom")
+    return v and v.Value or 0
+end
+
+local function getPos(inst)
+    if inst:IsA("BasePart") then return inst.Position end
+    if inst:IsA("Model") then return inst:GetPivot().Position end
+    local p = inst:FindFirstAncestorWhichIsA("BasePart")
+    if p then return p.Position end
+    local m = inst:FindFirstAncestorWhichIsA("Model")
+    return m and m:GetPivot().Position
+end
+
+local function teleportTo(pos)
+    local r = getRoot()
+    if r and pos then
+        r.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+    end
+end
+
+local function fire(prompt)
+    if fireproximityprompt then
+        fireproximityprompt(prompt)
+    end
+end
+
+local function currentRooms()
+    return workspace:FindFirstChild("CurrentRooms")
+end
+
+--------------------------------------------------------------------
+-- Funções
+--------------------------------------------------------------------
+-- Auto moedas (GoldPile nas salas + drops no chão)
+local function collectGold()
+    local rooms = currentRooms()
+    local root = getRoot()
+    if not rooms or not root then return end
+
+    local back = root.CFrame
+    local n = latestRoom()
+    for i = math.max(1, n - 1), n + 1 do
+        local room = rooms:FindFirstChild(tostring(i))
+        if room then
+            for _, d in ipairs(room:GetDescendants()) do
+                if not State.AutoLoot then return end
+                if d:IsA("ProximityPrompt") and d.Enabled
+                    and (d.Name == "LootPrompt" or (d.Parent and d.Parent.Name == "GoldPile")) then
+                    local pos = getPos(d)
+                    if pos then
+                        teleportTo(pos)
+                        task.wait(0.15)
+                        fire(d)
+                        task.wait(0.1)
+                    end
+                end
+            end
+        end
+    end
+
+    local drops = workspace:FindFirstChild("Drops")
+    if drops then
+        for _, item in ipairs(drops:GetChildren()) do
+            if not State.AutoLoot then return end
+            local prompt = item:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if prompt then
+                teleportTo(getPos(item))
+                task.wait(0.15)
+                fire(prompt)
+            end
+        end
+    end
+
+    if root.Parent then root.CFrame = back end
+end
+
+-- Auto chave
+local function collectKey()
+    local rooms = currentRooms()
+    if not rooms then return end
+    local room = rooms:FindFirstChild(tostring(latestRoom()))
+    if not room then return end
+    for _, d in ipairs(room:GetDescendants()) do
+        if d:IsA("ProximityPrompt") and d.Enabled
+            and d.Parent and d.Parent.Name == "KeyObtain" then
+            teleportTo(getPos(d))
+            task.wait(0.2)
+            fire(d)
+            task.wait(0.2)
+        end
+    end
+end
+
+-- Auto porta (vai até a porta da sala atual)
+local function goToDoor()
+    local rooms = currentRooms()
+    if not rooms then return end
+    local room = rooms:FindFirstChild(tostring(latestRoom()))
+    local door = room and room:FindFirstChild("Door")
+    local part = door and (door:FindFirstChild("Door") or door.PrimaryPart)
+    if part then
+        local r = getRoot()
+        if r then
+            r.CFrame = part.CFrame * CFrame.new(0, 0, -4)
+        end
+    end
+end
+
+-- Interação instantânea
+workspace.DescendantAdded:Connect(function(d)
+    if State.InstantPrompt and d:IsA("ProximityPrompt") then
+        d.HoldDuration = 0
+    end
+end)
+
+local function applyInstant()
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if d:IsA("ProximityPrompt") then
+            d.HoldDuration = 0
+            d.MaxActivationDistance = math.max(d.MaxActivationDistance, 12)
+        end
+    end
+end
+
+-- Fullbright
+local origLight = {
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    FogEnd = Lighting.FogEnd,
+    GlobalShadows = Lighting.GlobalShadows,
+    Ambient = Lighting.Ambient,
+}
+RunService.RenderStepped:Connect(function()
+    if State.Fullbright then
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.FogEnd = 1e6
+        Lighting.GlobalShadows = false
+        Lighting.Ambient = Color3.fromRGB(180, 180, 180)
+    end
+end)
+
+local function restoreLight()
+    for k, v in pairs(origLight) do
+        Lighting[k] = v
+    end
+end
+
+-- Noclip
+RunService.Stepped:Connect(function()
+    if State.Noclip and lp.Character then
+        for _, p in ipairs(lp.Character:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
+    end
+end)
+
+-- Velocidade
+RunService.Heartbeat:Connect(function()
+    local h = getHum()
+    if h and State.Speed ~= 16 then
+        h.WalkSpeed = State.Speed
+    end
+end)
+
+-- Anti-Screech
+task.spawn(function()
+    while task.wait(0.3) do
+        if State.AntiScreech then
+            local rf = RS:FindFirstChild("RemotesFolder")
+            local rem = rf and rf:FindFirstChild("Screech")
+            if rem and rem:IsA("RemoteEvent") then
+                pcall(function() rem:FireServer(true) end)
+            end
+        end
+    end
+end)
+
+-- ESP de portas
+local espFolder = Instance.new("Folder")
+espFolder.Name = "DoorsHubESP"
+espFolder.Parent = parentGui
+
+local function refreshESP()
+    espFolder:ClearAllChildren()
+    if not State.DoorESP then return end
+    local rooms = currentRooms()
+    if not rooms then return end
+    for _, room in ipairs(rooms:GetChildren()) do
+        local door = room:FindFirstChild("Door")
+        local part = door and door:FindFirstChild("Door")
+        if part then
+            local h = Instance.new("Highlight")
+            h.Adornee = door
+            h.FillColor = Color3.fromRGB(80, 255, 120)
+            h.FillTransparency = 0.5
+            h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            h.Parent = espFolder
+        end
+    end
+end
+
+-- ESP de objetos (itens, ouro, esconderijos, entidades, livros)
+local objFolder = Instance.new("Folder")
+objFolder.Name = "DoorsHubObjESP"
+objFolder.Parent = parentGui
+
+local tracked = {}
+
+local COLORS = {
+    Items = Color3.fromRGB(70, 160, 255),
+    Gold = Color3.fromRGB(255, 215, 60),
+    Hiding = Color3.fromRGB(80, 255, 120),
+    Entities = Color3.fromRGB(255, 70, 70),
+    Books = Color3.fromRGB(190, 110, 255),
+}
+
+-- nomes de entidades (podem mudar com atualizações do jogo)
+local ENTITY_NAMES = {
+    RushMoving = "Rush", AmbushMoving = "Ambush", BackdoorRush = "Blitz",
+    Eyes = "Eyes", A60 = "A-60", A120 = "A-120", SeekMoving = "Seek",
+    FigureRig = "Figure", FigureRagdoll = "Figure", Halt = "Halt",
+    Screech = "Screech", JeffTheKiller = "Jeff",
+}
+
+local function ownerModel(prompt, room)
+    local p = prompt.Parent
+    if not p then return nil end
+    local m = p:IsA("Model") and p or p:FindFirstAncestorWhichIsA("Model")
+    if m == room or m == workspace then return nil end
+    return m
+end
+
+local function track(inst, label, color, seen)
+    seen[inst] = true
+    if tracked[inst] then return end
+
+    local hl = Instance.new("Highlight")
+    hl.Adornee = inst
+    hl.FillColor = color
+    hl.OutlineColor = color
+    hl.FillTransparency = 0.6
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = objFolder
+
+    local anchor = inst
+    if inst:IsA("Model") then
+        anchor = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
+    end
+
+    local bb, txt
+    if anchor then
+        bb = Instance.new("BillboardGui")
+        bb.Adornee = anchor
+        bb.Size = UDim2.fromOffset(140, 20)
+        bb.StudsOffset = Vector3.new(0, 2, 0)
+        bb.AlwaysOnTop = true
+        bb.Parent = objFolder
+
+        txt = Instance.new("TextLabel")
+        txt.Size = UDim2.fromScale(1, 1)
+        txt.BackgroundTransparency = 1
+        txt.TextColor3 = color
+        txt.TextStrokeTransparency = 0.3
+        txt.Font = Enum.Font.GothamBold
+        txt.TextSize = 13
+        txt.Text = label
+        txt.Parent = bb
+    end
+
+    tracked[inst] = { hl = hl, bb = bb, txt = txt, label = label }
+end
+
+local function scanESP()
+    local seen = {}
+    local root = getRoot()
+    local rooms = currentRooms()
+    local n = latestRoom()
+
+    -- entidades soltas no workspace
+    if State.ESPEntities then
+        for _, c in ipairs(workspace:GetChildren()) do
+            local nm = ENTITY_NAMES[c.Name]
+            if nm and c:IsA("Model") then
+                track(c, nm, COLORS.Entities, seen)
+            end
+        end
+    end
+
+    if rooms then
+        for i = math.max(1, n - 1), n + 1 do
+            local room = rooms:FindFirstChild(tostring(i))
+            if room then
+                for _, d in ipairs(room:GetDescendants()) do
+                    if State.ESPEntities and d:IsA("Model") and ENTITY_NAMES[d.Name] then
+                        track(d, ENTITY_NAMES[d.Name], COLORS.Entities, seen)
+                    elseif d:IsA("ProximityPrompt") then
+                        local m = ownerModel(d, room)
+                        if m then
+                            if m.Name == "GoldPile" or d.Name == "LootPrompt" then
+                                if State.ESPGold then
+                                    local v = m:GetAttribute("GoldValue")
+                                    track(m, "Ouro" .. (v and (" (" .. v .. ")") or ""), COLORS.Gold, seen)
+                                end
+                            elseif d.Name == "HidePrompt" then
+                                if State.ESPHiding then
+                                    track(m, "Esconderijo", COLORS.Hiding, seen)
+                                end
+                            elseif m.Name == "LiveHintBook" then
+                                if State.ESPBooks then
+                                    track(m, "Livro", COLORS.Books, seen)
+                                end
+                            elseif d.Name == "ModulePrompt" then
+                                if State.ESPItems then
+                                    local label = (m.Name == "KeyObtain") and "Chave" or m.Name
+                                    track(m, label, COLORS.Items, seen)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- remove o que sumiu / foi desligado e atualiza distância
+    for inst, t in pairs(tracked) do
+        if not seen[inst] or not inst.Parent then
+            if t.hl then t.hl:Destroy() end
+            if t.bb then t.bb:Destroy() end
+            tracked[inst] = nil
+        elseif t.txt and root then
+            local pos = getPos(inst)
+            if pos then
+                t.txt.Text = t.label .. " [" .. math.floor((pos - root.Position).Magnitude) .. "]"
+            end
+        end
+    end
+end
+
+task.spawn(function()
+    while task.wait(0.8) do
+        if State.ESPItems or State.ESPGold or State.ESPHiding
+            or State.ESPEntities or State.ESPBooks or next(tracked) then
+            pcall(scanESP)
+        end
+    end
+end)
+
+-- Loops principais
+task.spawn(function()
+    while task.wait(1) do
+        if State.AutoLoot then pcall(collectGold) end
+    end
+end)
+
+task.spawn(function()
+    while task.wait(1) do
+        if State.AutoKey then pcall(collectKey) end
+    end
+end)
+
+task.spawn(function()
+    local last = -1
+    while task.wait(1.5) do
+        if State.AutoDoor then
+            local n = latestRoom()
+            if n ~= last then
+                last = n
+                pcall(goToDoor)
+            end
+        end
+        if State.InstantPrompt then pcall(applyInstant) end
+        if State.DoorESP then pcall(refreshESP) end
+    end
+end)
+
+lp.CharacterAdded:Connect(function(c)
+    c:WaitForChild("Humanoid")
+end)
+
+--------------------------------------------------------------------
+-- UI
+--------------------------------------------------------------------
+local gui = Instance.new("ScreenGui")
+gui.Name = "DoorsHub"
+gui.ResetOnSpawn = false
+gui.Parent = parentGui
+
+local main = Instance.new("Frame")
+main.Size = UDim2.fromOffset(280, 380)
+main.Position = UDim2.new(0.5, -140, 0.5, -190)
+main.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+main.BorderSizePixel = 0
+main.Active = true
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+
+local top = Instance.new("Frame")
+top.Size = UDim2.new(1, 0, 0, 36)
+top.BackgroundColor3 = Color3.fromRGB(34, 34, 40)
+top.BorderSizePixel = 0
+top.Parent = main
+Instance.new("UICorner", top).CornerRadius = UDim.new(0, 10)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -80, 1, 0)
+title.Position = UDim2.fromOffset(12, 0)
+title.BackgroundTransparency = 1
+title.Text = "Doors Hub"
+title.TextColor3 = Color3.fromRGB(240, 240, 240)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 16
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = top
+
+local function topButton(text, xOff)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.fromOffset(28, 24)
+    b.Position = UDim2.new(1, xOff, 0, 6)
+    b.BackgroundColor3 = Color3.fromRGB(50, 50, 58)
+    b.Text = text
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 14
+    b.BorderSizePixel = 0
+    b.Parent = top
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    return b
+end
+
+local minBtn = topButton("-", -68)
+local closeBtn = topButton("X", -36)
+
+local tabBar = Instance.new("Frame")
+tabBar.Size = UDim2.new(1, -20, 0, 26)
+tabBar.Position = UDim2.fromOffset(10, 42)
+tabBar.BackgroundTransparency = 1
+tabBar.BorderSizePixel = 0
+tabBar.Parent = main
+
+local tabLayout = Instance.new("UIListLayout", tabBar)
+tabLayout.FillDirection = Enum.FillDirection.Horizontal
+tabLayout.Padding = UDim.new(0, 6)
+
+local pagesHolder = Instance.new("Frame")
+pagesHolder.Size = UDim2.new(1, -20, 1, -80)
+pagesHolder.Position = UDim2.fromOffset(10, 74)
+pagesHolder.BackgroundTransparency = 1
+pagesHolder.BorderSizePixel = 0
+pagesHolder.Parent = main
+
+local pages, tabButtons = {}, {}
+
+local function selectTab(name)
+    for n, p in pairs(pages) do
+        p.Visible = (n == name)
+        tabButtons[n].BackgroundColor3 = (n == name)
+            and Color3.fromRGB(60, 90, 200) or Color3.fromRGB(45, 45, 52)
+    end
+end
+
+local function makeTab(name)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0.5, -3, 1, 0)
+    b.BackgroundColor3 = Color3.fromRGB(45, 45, 52)
+    b.Text = name
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 14
+    b.BorderSizePixel = 0
+    b.Parent = tabBar
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    tabButtons[name] = b
+
+    local page = Instance.new("ScrollingFrame")
+    page.Size = UDim2.fromScale(1, 1)
+    page.BackgroundTransparency = 1
+    page.BorderSizePixel = 0
+    page.ScrollBarThickness = 4
+    page.CanvasSize = UDim2.new(0, 0, 0, 0)
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.Visible = false
+    page.Parent = pagesHolder
+    local l = Instance.new("UIListLayout", page)
+    l.Padding = UDim.new(0, 6)
+    pages[name] = page
+
+    b.MouseButton1Click:Connect(function() selectTab(name) end)
+    return page
+end
+
+makeTab("Main")
+makeTab("ESP")
+
+-- os helpers abaixo adicionam elementos na página "content" atual
+local content = pages.Main
+
+local function addToggle(label, key, onChange)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, -6, 0, 30)
+    b.BackgroundColor3 = Color3.fromRGB(45, 45, 52)
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Font = Enum.Font.Gotham
+    b.TextSize = 14
+    b.BorderSizePixel = 0
+    b.AutoButtonColor = false
+    b.Parent = content
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+
+    local function refresh()
+        b.Text = label .. ": " .. (State[key] and "ON" or "OFF")
+        b.BackgroundColor3 = State[key] and Color3.fromRGB(40, 140, 80) or Color3.fromRGB(45, 45, 52)
+    end
+    refresh()
+
+    b.MouseButton1Click:Connect(function()
+        State[key] = not State[key]
+        refresh()
+        if onChange then onChange(State[key]) end
+    end)
+end
+
+local function addButton(label, fn)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, -6, 0, 30)
+    b.BackgroundColor3 = Color3.fromRGB(60, 90, 200)
+    b.Text = label
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Font = Enum.Font.Gotham
+    b.TextSize = 14
+    b.BorderSizePixel = 0
+    b.Parent = content
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    b.MouseButton1Click:Connect(function() pcall(fn) end)
+end
+
+local function addSpeedBox()
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(1, -6, 0, 30)
+    box.BackgroundColor3 = Color3.fromRGB(45, 45, 52)
+    box.PlaceholderText = "Velocidade (16 = normal)"
+    box.Text = tostring(State.Speed)
+    box.TextColor3 = Color3.new(1, 1, 1)
+    box.PlaceholderColor3 = Color3.fromRGB(150, 150, 150)
+    box.Font = Enum.Font.Gotham
+    box.TextSize = 14
+    box.BorderSizePixel = 0
+    box.ClearTextOnFocus = false
+    box.Parent = content
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+    box.FocusLost:Connect(function()
+        local v = tonumber(box.Text)
+        if v then
+            State.Speed = math.clamp(v, 8, 500)
+            local h = getHum()
+            if h and State.Speed == 16 then h.WalkSpeed = 16 end
+        end
+    end)
+end
+
+-- Opções da aba Main
+addToggle("Auto Moedas", "AutoLoot")
+addToggle("Auto Chave", "AutoKey")
+addToggle("Auto Porta", "AutoDoor")
+addToggle("Interação Instantânea", "InstantPrompt")
+addToggle("Anti-Screech", "AntiScreech")
+addToggle("Fullbright", "Fullbright", function(on) if not on then restoreLight() end end)
+addToggle("Noclip", "Noclip")
+addSpeedBox()
+addButton("Ir para a porta atual", goToDoor)
+addButton("Pegar moedas agora", function()
+    local was = State.AutoLoot
+    State.AutoLoot = true
+    collectGold()
+    State.AutoLoot = was
+end)
+
+-- Opções da aba ESP
+content = pages.ESP
+addToggle("ESP de Portas", "DoorESP", function() refreshESP() end)
+addToggle("ESP de Itens / Chaves", "ESPItems")
+addToggle("ESP de Moedas", "ESPGold")
+addToggle("ESP de Esconderijos", "ESPHiding")
+addToggle("ESP de Entidades", "ESPEntities")
+addToggle("ESP de Livros (Biblioteca)", "ESPBooks")
+
+selectTab("Main")
+
+-- Minimizar / fechar
+local ball = Instance.new("TextButton")
+ball.Name = "DBall"
+ball.Size = UDim2.fromOffset(50, 50)
+ball.Position = UDim2.new(0, 20, 0.5, -25)
+ball.BackgroundColor3 = Color3.fromRGB(60, 90, 200)
+ball.Text = "D"
+ball.TextColor3 = Color3.new(1, 1, 1)
+ball.Font = Enum.Font.GothamBold
+ball.TextSize = 24
+ball.BorderSizePixel = 0
+ball.AutoButtonColor = false
+ball.Visible = false
+ball.Active = true
+ball.Parent = gui
+Instance.new("UICorner", ball).CornerRadius = UDim.new(1, 0)
+
+local ballStroke = Instance.new("UIStroke", ball)
+ballStroke.Color = Color3.fromRGB(255, 255, 255)
+ballStroke.Thickness = 2
+ballStroke.Transparency = 0.5
+
+minBtn.MouseButton1Click:Connect(function()
+    ball.Position = UDim2.new(main.Position.X.Scale, main.Position.X.Offset,
+        main.Position.Y.Scale, main.Position.Y.Offset)
+    main.Visible = false
+    ball.Visible = true
+end)
+
+-- bolinha: arrasta, e um clique (sem arrastar) reabre a UI
+do
+    local dragging, moved, startInput, startPos = false, false, nil, nil
+    ball.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            moved = false
+            startInput = i.Position
+            startPos = ball.Position
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
+            or i.UserInputType == Enum.UserInputType.Touch) then
+            local d = i.Position - startInput
+            if d.Magnitude > 6 then moved = true end
+            if moved then
+                ball.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
+                    startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch) then
+            dragging = false
+            if not moved then
+                ball.Visible = false
+                main.Visible = true
+            end
+        end
+    end)
+end
+
+closeBtn.MouseButton1Click:Connect(function()
+    for k, v in pairs(State) do
+        if type(v) == "boolean" then State[k] = false end
+    end
+    restoreLight()
+    espFolder:Destroy()
+    objFolder:Destroy()
+    gui:Destroy()
+end)
+
+-- Arrastar a janela
+do
+    local dragging, dragStart, startPos
+    top.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = i.Position
+            startPos = main.Position
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
+            or i.UserInputType == Enum.UserInputType.Touch) then
+            local d = i.Position - dragStart
+            main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+end
